@@ -1,0 +1,319 @@
+{% extends "base.html" %}
+
+{% block title %}HR Knowledge | HR Insight AI{% endblock %}
+{% block page_name %}HR Knowledge{% endblock %}
+
+{% block content %}
+
+<div class="knowledge-page">
+
+    <!-- =========================
+         HERO
+    ========================== -->
+    <section class="knowledge-hero">
+
+        <div>
+
+            <div class="eyebrow">
+                <span class="eyebrow-dot"></span>
+                Information retrieval workspace
+            </div>
+
+            <h1>HR Knowledge Intelligence</h1>
+
+            <p>
+                Search the internal HR knowledge base using
+                multiple retrieval models and compare relevant
+                policy documents through ranked results.
+            </p>
+
+        </div>
+
+        <div class="knowledge-status">
+            <span class="knowledge-status-dot"></span>
+            20 documents indexed
+        </div>
+
+    </section>
+
+
+    <!-- =========================
+         SEARCH WORKSPACE
+    ========================== -->
+    <section class="knowledge-search-card">
+
+        <div class="knowledge-search-header">
+
+            <div>
+
+                <span class="section-kicker">
+                    Retrieval engine
+                </span>
+
+                <h2>Search HR Knowledge Base</h2>
+
+                <p>
+                    Select a retrieval model and enter an
+                    HR-related query.
+                </p>
+
+            </div>
+
+            <span class="ir-engine-chip">
+                <i data-lucide="database"></i>
+                IR Engine
+            </span>
+
+        </div>
+
+
+        <!-- SEARCH CONTROLS -->
+        <div class="knowledge-search-controls">
+
+            <div class="knowledge-search-input">
+
+                <i data-lucide="search"></i>
+
+                <input
+                    id="searchInput"
+                    type="text"
+                    class="form-control"
+                    placeholder="Search promotion, overtime, training, benefits..."
+                    autocomplete="off"
+                >
+
+            </div>
+
+
+            <div class="knowledge-method-select">
+
+                <select
+                    id="searchMethod"
+                    class="form-control"
+                    aria-label="Retrieval method"
+                >
+                    <option value="bm25">
+                        BM25
+                    </option>
+
+                    <option value="tfidf">
+                        TF-IDF
+                    </option>
+
+                    <option value="language_model">
+                        Language Model
+                    </option>
+                </select>
+
+            </div>
+
+
+            <button
+                id="searchButton"
+                type="button"
+                class="btn btn-primary knowledge-search-button"
+            >
+                <i data-lucide="search"></i>
+                Search
+            </button>
+
+        </div>
+
+
+        <!-- METHOD INFORMATION -->
+        <div class="retrieval-methods">
+
+            <button
+                type="button"
+                class="retrieval-method active"
+                data-method="bm25"
+            >
+                <span class="retrieval-method-icon">
+                    <i data-lucide="bar-chart-3"></i>
+                </span>
+
+                <span>
+                    <strong>BM25</strong>
+                    <small>Probabilistic ranking</small>
+                </span>
+            </button>
+
+
+            <button
+                type="button"
+                class="retrieval-method"
+                data-method="tfidf"
+            >
+                <span class="retrieval-method-icon">
+                    <i data-lucide="scan-text"></i>
+                </span>
+
+                <span>
+                    <strong>TF-IDF</strong>
+                    <small>Term-weighted retrieval</small>
+                </span>
+            </button>
+
+
+            <button
+                type="button"
+                class="retrieval-method"
+                data-method="language_model"
+            >
+                <span class="retrieval-method-icon">
+                    <i data-lucide="brain"></i>
+                </span>
+
+                <span>
+                    <strong>Language Model</strong>
+                    <small>Query-likelihood ranking</small>
+                </span>
+            </button>
+
+        </div>
+
+
+        <!-- QUICK SEARCH -->
+        <div class="quick-search-section">
+
+            <span class="quick-search-label">
+                Suggested queries
+            </span>
+
+            <div class="quick-search-list">
+
+                <button
+                    type="button"
+                    class="quick-search"
+                    data-query="promotion policy"
+                >
+                    Promotion Policy
+                </button>
+
+                <button
+                    type="button"
+                    class="quick-search"
+                    data-query="overtime"
+                >
+                    Overtime
+                </button>
+
+                <button
+                    type="button"
+                    class="quick-search"
+                    data-query="training"
+                >
+                    Training
+                </button>
+
+                <button
+                    type="button"
+                    class="quick-search"
+                    data-query="employee benefits"
+                >
+                    Employee Benefits
+                </button>
+
+                <button
+                    type="button"
+                    class="quick-search"
+                    data-query="performance review"
+                >
+                    Performance Review
+                </button>
+
+            </div>
+
+        </div>
+
+    </section>
+
+
+    <!-- =========================
+         SEARCH STATUS
+    ========================== -->
+    <div
+        id="searchStatus"
+        class="knowledge-search-status"
+    ></div>
+
+
+    <!-- =========================
+         RESULTS
+    ========================== -->
+    <section class="knowledge-results-section">
+
+        <div class="knowledge-results-heading">
+
+            <div>
+
+                <span class="section-kicker">
+                    Ranked retrieval
+                </span>
+
+                <h2>Search Results</h2>
+
+            </div>
+
+            <span class="results-limit">
+                Top 5 results
+            </span>
+
+        </div>
+
+
+        <div
+            id="searchResults"
+            class="knowledge-results-grid"
+        >
+
+            <article class="knowledge-empty-card">
+
+                <div class="knowledge-empty-icon">
+                    <i data-lucide="book-open-search"></i>
+                </div>
+
+                <h3>
+                    Search the HR Knowledge Base
+                </h3>
+
+                <p>
+                    Enter an HR-related query to retrieve
+                    and rank relevant policy documents.
+                </p>
+
+            </article>
+
+        </div>
+
+    </section>
+
+
+    <!-- =========================
+         INFORMATION NOTE
+    ========================== -->
+    <div class="knowledge-note">
+
+        <i data-lucide="info"></i>
+
+        <span>
+            Search results are retrieved from the internal
+            HR document collection. Relevance scores represent
+            the selected retrieval model's ranking signal.
+        </span>
+
+    </div>
+
+</div>
+
+{% endblock %}
+
+
+{% block scripts %}
+
+<script src="{{ url_for(
+    'static',
+    filename='js/knowledge_search.js'
+) }}"></script>
+
+{% endblock %}
