@@ -1,0 +1,10 @@
+Flask
+joblib
+matplotlib
+numpy
+pandas
+python-docx
+pypdf
+scikit-learn
+shap
+tensorflow
