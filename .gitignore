@@ -1,43 +1,79 @@
+# ==============================================================
+# .gitignore  —  Employee Attrition & Performance AI Project
+# ==============================================================
+
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
 
 # Virtual environments
 .venv/
 venv/
 env/
 ENV/
+.env
+.env.local
+.env.*.local
+# Keep the template
+!.env.example
 
 # IDE / editor
 .vscode/
 .idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
 
 # OS files
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Logs
+logs/
 *.log
 
 # Jupyter
 .ipynb_checkpoints/
 
-# Python build files
+# Python packaging
 build/
 dist/
 *.egg-info/
+*.egg
+MANIFEST
 
-# Local environment
-.env
-.env.*
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
 
-# TensorFlow / ML temporary files
+# Testing
+.tox/
+
+# Large ML model files (store in cloud storage / DVC / Git LFS)
+# models/*.keras
+# models/*.pkl
+
+# Numpy processed arrays (regenerate with preprocess scripts)
+processed_data/*.npy
+
+# TensorFlow / Keras temp files
 *.keras.tmp
 *.h5.tmp
+*.joblib.tmp
 
-# Large generated model files
-*.joblib
+# Docker
+.dockerignore
 
-# Keep source model files only if they are below GitHub's file-size limit.
-# Large model binaries should be stored separately.
+# Secrets & credentials
+*.pem
+*.key
+*.crt
+
+# Local data (do not push raw HR data to public repos)
+# data/

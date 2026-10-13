@@ -1,187 +1,162 @@
-# ==========================================================
-# hr_recommendation.py
-#
-# Content-Based HR Recommendation
-# Uses employee prediction + BM25 retrieval
-# ==========================================================
+"""
+Unit VI - Knowledge-Based / Content-Based HR Recommendation
 
-from pathlib import Path
-import sys
+Uses employee prediction signals to construct an HR information need, then
+retrieves and fuses relevant HR resources using:
+    - BM25
+    - TF-IDF
+    - Language Model
 
-# Import our existing prediction service
+The final recommendation uses Reciprocal Rank Fusion (RRF) so that a document
+supported by multiple retrieval models receives a stronger recommendation
+signal than a document appearing in only one ranked list.
+"""
+
 from prediction_service import predict_employee
+from ir_analysis import (
+    compare_retrieval_methods,
+    extract_information
+)
 
-# Import our existing BM25 search
-from bm25_search import bm25_search
 
+# ----------------------------------------------------------
+# CREATE HR INFORMATION NEED
+# ----------------------------------------------------------
 
-# ==========================================================
-# CREATE HR QUERY FROM EMPLOYEE ANALYSIS
-# ==========================================================
-
-def create_hr_query(
-    employee_data,
-    prediction_result
-):
-    """
-    Generate an HR knowledge-base query based on
-    employee risk and development needs.
-    """
+def create_hr_query(employee_data, prediction_result):
+    """Generate a domain-specific HR retrieval query."""
 
     queries = []
 
-    attrition = prediction_result["attrition"]
+    attrition = prediction_result.get(
+        "attrition",
+        {}
+    )
+    performance = prediction_result.get(
+        "performance",
+        {}
+    )
 
-    performance = prediction_result["performance"]
-
-    # ------------------------------------------------------
-    # ATTRITION RISK
-    # ------------------------------------------------------
-
-    if attrition["risk"] == "HIGH":
-
-        queries.append(
-            "employee wellness work life balance support"
+    risk = str(
+        attrition.get(
+            "risk",
+            attrition.get("risk_level", "LOW")
         )
+    ).upper()
 
-    elif attrition["risk"] == "MEDIUM":
-
+    if risk == "HIGH":
         queries.append(
-            "employee engagement workload support"
+            "employee retention wellness work life balance support workload"
         )
-
-    # ------------------------------------------------------
-    # BURNOUT
-    # ------------------------------------------------------
+    elif risk == "MEDIUM":
+        queries.append(
+            "employee engagement workload support retention"
+        )
+    else:
+        queries.append(
+            "employee development performance engagement HR policy"
+        )
 
     burnout = float(
-        employee_data["burnout_score"]
+        employee_data.get("burnout_score", 0)
     )
-
     if burnout >= 7:
-
         queries.append(
-            "burnout employee assistance wellness"
+            "burnout employee assistance wellness workload"
         )
-
-    # ------------------------------------------------------
-    # ENGAGEMENT
-    # ------------------------------------------------------
 
     engagement = float(
-        employee_data["engagement_score"]
+        employee_data.get("engagement_score", 10)
     )
-
     if engagement <= 4:
-
         queries.append(
-            "employee engagement support"
+            "employee engagement support communication"
         )
-
-    # ------------------------------------------------------
-    # MANAGER SUPPORT
-    # ------------------------------------------------------
 
     manager_support = float(
-        employee_data["manager_support_score"]
+        employee_data.get("manager_support_score", 10)
     )
-
     if manager_support <= 4:
-
         queries.append(
-            "manager support communication"
+            "manager support communication feedback"
         )
-
-    # ------------------------------------------------------
-    # CAREER DEVELOPMENT
-    # ------------------------------------------------------
 
     years_since_promotion = float(
-        employee_data["years_since_promotion"]
+        employee_data.get("years_since_promotion", 0)
+    )
+    if years_since_promotion >= 4:
+        queries.append(
+            "promotion career development performance progression"
+        )
+
+    overtime = float(
+        employee_data.get("overtime_hours_per_week", 0)
+    )
+    if overtime >= 15:
+        queries.append(
+            "overtime workload compensation work life balance"
+        )
+
+    work_life = float(
+        employee_data.get("work_life_balance_score", 10)
+    )
+    if work_life <= 4:
+        queries.append(
+            "work life balance leave flexibility"
+        )
+
+    training = float(
+        employee_data.get("training_hours", 0)
+    )
+    if training < 15:
+        queries.append(
+            "training skill development learning"
+        )
+
+    rating = int(
+        float(
+            performance.get(
+                "rating",
+                employee_data.get("performance_rating", 3)
+            )
+        )
     )
 
-    if years_since_promotion >= 4:
-
-        queries.append(
-            "promotion career development performance"
-        )
-
-    # ------------------------------------------------------
-    # PERFORMANCE
-    # ------------------------------------------------------
-
-    rating = performance["rating"]
-
     if rating <= 2:
-
         queries.append(
-            "performance improvement training"
+            "performance improvement training support"
         )
-
     elif rating == 3:
-
         queries.append(
-            "employee training skill development"
+            "employee development performance training"
         )
-
-    elif rating == 5:
-
+    elif rating >= 5:
         queries.append(
-            "employee recognition career development"
+            "employee recognition reward career development"
         )
 
-    # ------------------------------------------------------
-    # DEFAULT
-    # ------------------------------------------------------
+    query = " ".join(queries).strip()
 
-    if not queries:
+    if not query:
+        return "employee development HR policy"
 
-        queries.append(
-            "employee development HR policy"
-        )
-
-    # Combine queries
-    return " ".join(queries)
+    return query
 
 
-# ==========================================================
-# REMOVE DUPLICATE DOCUMENTS
-# ==========================================================
-
-def remove_duplicates(results):
-
-    seen = set()
-
-    unique_results = []
-
-    for result in results:
-
-        document = result["document"]
-
-        if document in seen:
-            continue
-
-        seen.add(document)
-
-        unique_results.append(
-            result
-        )
-
-    return unique_results
-
-
-# ==========================================================
-# GENERATE RECOMMENDATIONS
-# ==========================================================
+# ----------------------------------------------------------
+# KNOWLEDGE-BASED RECOMMENDATION
+# ----------------------------------------------------------
 
 def recommend_hr_resources(
     employee_data,
     prediction_result,
-    top_n=3
+    top_n=5
 ):
     """
-    Retrieve the most relevant HR documents
-    using BM25.
+    Retrieve and fuse HR resources for an employee's information need.
+
+    Returns both model-specific rankings and a fused knowledge-based
+    recommendation list.
     """
 
     query = create_hr_query(
@@ -189,51 +164,75 @@ def recommend_hr_resources(
         prediction_result
     )
 
-    print("\nGenerated HR query:")
-    print(query)
-
-    # Search using BM25
-    results = bm25_search(
-        query
+    retrieval = compare_retrieval_methods(
+        query,
+        top_k=max(5, int(top_n))
     )
 
-    results = remove_duplicates(
-        results
-    )
+    comparison = retrieval["comparison"]
 
     recommendations = []
 
-    for result in results[:top_n]:
+    for item in comparison[:max(1, int(top_n))]:
+        document_id = item["document"]
 
-        recommendations.append(
-            {
-                "document": result["document"],
-                "score": round(
-                    result["score"],
-                    4
-                )
-            }
+        methods = []
+
+        if item["bm25_rank"] is not None:
+            methods.append({
+                "method": "BM25",
+                "rank": item["bm25_rank"],
+                "score": item["bm25_score"]
+            })
+
+        if item["tfidf_rank"] is not None:
+            methods.append({
+                "method": "TF-IDF",
+                "rank": item["tfidf_rank"],
+                "score": item["tfidf_score"]
+            })
+
+        if item["language_model_rank"] is not None:
+            methods.append({
+                "method": "Language Model",
+                "rank": item["language_model_rank"],
+                "score": item["language_model_score"]
+            })
+
+        extracted = extract_information(
+            document_id
         )
+
+        recommendations.append({
+            "document": document_id,
+            "rrf_score": item["rrf_score"],
+            "method_agreement": item["method_agreement"],
+            "best_rank": item["best_rank"],
+            "methods": methods,
+            "information_extraction": extracted
+        })
 
     return {
         "query": query,
-        "recommendations": recommendations
+        "recommendation_type": "Knowledge-Based HR Recommendation",
+        "retrieval_models": [
+            "BM25",
+            "TF-IDF",
+            "Language Model"
+        ],
+        "recommendations": recommendations,
+        "ranking_fusion": "Reciprocal Rank Fusion (RRF)"
     }
 
 
-# ==========================================================
+# ----------------------------------------------------------
 # TEST
-# ==========================================================
+# ----------------------------------------------------------
 
 if __name__ == "__main__":
-
     print("=" * 70)
-    print("CONTENT-BASED HR RECOMMENDATION")
+    print("KNOWLEDGE-BASED HR RECOMMENDATION")
     print("=" * 70)
-
-    # ------------------------------------------------------
-    # Example employee
-    # ------------------------------------------------------
 
     employee = {
         "age": 30,
@@ -265,68 +264,50 @@ if __name__ == "__main__":
         "perceived_ai_job_risk": 6,
     }
 
-    # ------------------------------------------------------
-    # Run prediction
-    # ------------------------------------------------------
-
-    prediction = predict_employee(
-        employee
-    )
+    prediction = predict_employee(employee)
 
     print("\nPrediction:")
-
     print(
-        f"Attrition Risk: "
+        "Attrition Risk : "
         f"{prediction['attrition']['risk']}"
     )
-
     print(
-        f"Attrition Probability: "
+        "Attrition      : "
         f"{prediction['attrition']['percentage']}%"
     )
-
     print(
-        f"Performance Rating: "
+        "Performance     : "
         f"{prediction['performance']['rating']}"
     )
-
-    # ------------------------------------------------------
-    # Recommendations
-    # ------------------------------------------------------
 
     result = recommend_hr_resources(
         employee,
         prediction,
-        top_n=3
+        top_n=5
     )
 
-    print("\n" + "=" * 70)
-    print("RECOMMENDED HR RESOURCES")
-    print("=" * 70)
+    print("\nGenerated HR information need:")
+    print(result["query"])
 
-    if not result["recommendations"]:
+    print("\nRecommended HR resources:")
 
+    for rank, item in enumerate(
+        result["recommendations"],
+        start=1
+    ):
         print(
-            "No relevant HR resources found."
+            f"\n{rank}. {item['document']}"
         )
-
-    else:
-
-        for index, recommendation in enumerate(
-            result["recommendations"],
-            start=1
-        ):
-
-            print(
-                f"\n{index}. "
-                f"{recommendation['document']}"
+        print(
+            f"   RRF Score       : {item['rrf_score']}"
+        )
+        print(
+            f"   Method Agreement: {item['method_agreement']}/3"
+        )
+        print(
+            "   Retrieved by    : "
+            + ", ".join(
+                method["method"]
+                for method in item["methods"]
             )
-
-            print(
-                f"   BM25 Score: "
-                f"{recommendation['score']}"
-            )
-
-    print("\n" + "=" * 70)
-    print("RECOMMENDATION MODULE COMPLETED")
-    print("=" * 70)
+        )

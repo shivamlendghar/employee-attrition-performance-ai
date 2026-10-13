@@ -4,56 +4,32 @@
 # Unified Employee Attrition + Performance Prediction
 # ==========================================================
 
-from pathlib import Path
-
 import joblib
 import numpy as np
 import pandas as pd
 
 from tensorflow import keras
 
-
-# ==========================================================
-# PATHS
-# ==========================================================
-
-PROJECT_DIR = Path(__file__).resolve().parent
-
-ARTIFACT_DIR = PROJECT_DIR / "artifacts"
-MODEL_DIR = PROJECT_DIR / "models"
-RESULT_DIR = PROJECT_DIR / "results"
-
-
-# ==========================================================
-# FILE PATHS
-# ==========================================================
-
-ATTRITION_MODEL_PATH = (
-    MODEL_DIR / "attrition_deep_learning.keras"
+from config import (
+    ARTIFACT_DIR,
+    MODEL_DIR,
+    RESULT_DIR,
+    ATTRITION_MODEL_PATH,
+    PERFORMANCE_MODEL_PATH,
+    ATTRITION_PREPROCESSOR_PATH,
+    PERFORMANCE_PREPROCESSOR_PATH,
+    THRESHOLD_PATH,
 )
+from logger import get_logger
 
-PERFORMANCE_MODEL_PATH = (
-    MODEL_DIR / "performance_deep_learning.keras"
-)
-
-ATTRITION_PREPROCESSOR_PATH = (
-    ARTIFACT_DIR / "attrition_preprocessor.pkl"
-)
-
-PERFORMANCE_PREPROCESSOR_PATH = (
-    ARTIFACT_DIR / "performance_preprocessor.pkl"
-)
-
-THRESHOLD_PATH = (
-    RESULT_DIR / "best_attrition_threshold.txt"
-)
+logger = get_logger(__name__)
 
 
 # ==========================================================
 # LOAD MODELS
 # ==========================================================
 
-print("Loading prediction models...")
+logger.info("Loading prediction models...")
 
 attrition_model = keras.models.load_model(
     ATTRITION_MODEL_PATH
@@ -63,14 +39,14 @@ performance_model = keras.models.load_model(
     PERFORMANCE_MODEL_PATH
 )
 
-print("Models loaded successfully.")
+logger.info("Models loaded successfully.")
 
 
 # ==========================================================
 # LOAD PREPROCESSORS
 # ==========================================================
 
-print("Loading preprocessors...")
+logger.info("Loading preprocessors...")
 
 attrition_preprocessor = joblib.load(
     ATTRITION_PREPROCESSOR_PATH
@@ -80,7 +56,7 @@ performance_preprocessor = joblib.load(
     PERFORMANCE_PREPROCESSOR_PATH
 )
 
-print("Preprocessors loaded successfully.")
+logger.info("Preprocessors loaded successfully.")
 
 
 # ==========================================================
