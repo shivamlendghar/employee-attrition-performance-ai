@@ -1,8 +1,15 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response
 
 import csv
+import io
 import math
+from datetime import datetime
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load local environment variables (including BRAVE_SEARCH_API_KEY) from the project root.
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 import joblib
 import numpy as np
@@ -14,6 +21,20 @@ from prediction_service import predict_employee
 from bm25_search import bm25_search
 from ir_search_service import tfidf_search
 from language_model_search import search as language_model_search
+from ir_analysis import build_ir_analysis
+
+
+# Industry standard: structured logging, centralised config, input validation
+from logger import get_logger
+from config import SECRET_KEY, MODEL_INPUT_COLUMNS
+from validator import validate_employee
+
+# Phase 2: business intelligence + model versioning
+from business_kpi import calculate_employee_kpis, calculate_workforce_kpis
+from model_registry import registry as model_registry
+
+logger = get_logger(__name__)
+
 
 
 # =========================================================
@@ -21,6 +42,8 @@ from language_model_search import search as language_model_search
 # =========================================================
 
 app = Flask(__name__)
+app.secret_key = SECRET_KEY
+
 
 
 # =========================================================
@@ -546,9 +569,15 @@ def employees():
 
 @app.route("/knowledge-search")
 def knowledge_search():
-
+    """Render the HR knowledge workspace with a live collection file count."""
+    document_count = (
+        sum(1 for path in HR_DOCUMENTS_PATH.rglob("*.txt") if path.is_file())
+        if HR_DOCUMENTS_PATH.exists()
+        else 0
+    )
     return render_template(
-        "knowledge_search.html"
+        "knowledge_search.html",
+        document_count=document_count,
     )
 
 
@@ -569,10 +598,20 @@ def model_evidence():
     methods=["GET"]
 )
 def health():
+    """
+    Health check endpoint.
+
+    Used by load balancers, Kubernetes liveness probes,
+    and Docker HEALTHCHECK instructions.
+    """
+    from config import ENV
 
     return jsonify({
-        "status": "ok",
-        "message": "HR AI system is running"
+        "status":    "ok",
+        "message":   "HR AI Decision Support System is running",
+        "version":   "2.0.0",
+        "env":       ENV,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
     })
 
 
@@ -832,44 +871,211 @@ def api_employee(employee_id):
     methods=["POST"]
 )
 def api_predict():
+    """
+    Single-employee attrition + performance prediction.
+
+    Accepts a JSON body with employee features.
+    Returns attrition risk, performance rating, and SHAP
+    feature contributions.
+    """
 
     try:
 
         data = request.get_json()
 
         if not data:
-
+            logger.warning("Prediction request received with empty body")
             return jsonify({
-
                 "success": False,
-
-                "error":
-                    "No employee data received"
-
+                "error": "No employee data received",
             }), 400
 
-        result = predict_employee(
-            data
+        # ── Input validation ──────────────────────────────
+        validation = validate_employee(data)
+
+        if not validation.is_valid:
+            logger.warning(
+                "Prediction rejected — validation errors: %s",
+                validation.errors,
+            )
+            return jsonify({
+                "success":  False,
+                "error":    "Validation failed",
+                "details":  validation.errors,
+                "warnings": validation.warnings,
+            }), 422
+
+        if validation.warnings:
+            logger.info(
+                "Prediction proceeding with warnings: %s",
+                validation.warnings,
+            )
+
+        # ── Run inference ─────────────────────────────────
+        logger.info(
+            "Running prediction for employee (dept=%s role=%s)",
+            data.get("department", "?"),
+            data.get("job_role", "?"),
         )
 
-        return jsonify(
-            result
-        )
+        result = predict_employee(data)
+
+        # Attach validation warnings to response
+        if validation.warnings:
+            result["validation_warnings"] = validation.warnings
+
+        logger.info("Prediction completed successfully")
+        return jsonify(result)
 
     except Exception as error:
 
-        print(
-            "Prediction error:",
-            error
+        logger.exception("Prediction error: %s", error)
+
+        return jsonify({
+            "success": False,
+            "error":   str(error),
+        }), 500
+
+
+# =========================================================
+# BATCH PREDICTION API
+# =========================================================
+
+@app.route(
+    "/api/predict/batch",
+    methods=["POST"]
+)
+def api_predict_batch():
+    """
+    Batch attrition + performance prediction.
+
+    Accepts a JSON body: ``{"employees": [ {...}, {...}, ... ]}``
+    Returns per-employee predictions with a summary section.
+
+    - Up to 100 employees per request.
+    - Invalid records are skipped and reported in ``errors``.
+    """
+
+    MAX_BATCH_SIZE = 100
+
+    try:
+
+        body = request.get_json()
+
+        if not body or "employees" not in body:
+            return jsonify({
+                "success": False,
+                "error":   "Request body must contain an 'employees' list.",
+            }), 400
+
+        employees = body["employees"]
+
+        if not isinstance(employees, list) or len(employees) == 0:
+            return jsonify({
+                "success": False,
+                "error":   "'employees' must be a non-empty list.",
+            }), 400
+
+        if len(employees) > MAX_BATCH_SIZE:
+            return jsonify({
+                "success": False,
+                "error":   f"Batch size {len(employees)} exceeds limit of {MAX_BATCH_SIZE}.",
+            }), 400
+
+        logger.info("Batch prediction request: %d employees", len(employees))
+
+        results      = []
+        errors       = []
+        high_risk    = 0
+        medium_risk  = 0
+        low_risk     = 0
+
+        for idx, employee in enumerate(employees):
+
+            employee_id = (
+                str(employee.get("employee_id", ""))
+                or f"index_{idx}"
+            )
+
+            # Validate
+            validation = validate_employee(employee)
+
+            if not validation.is_valid:
+                errors.append({
+                    "employee_id": employee_id,
+                    "index":       idx,
+                    "errors":      validation.errors,
+                })
+                continue
+
+            try:
+                prediction = predict_employee(employee)
+
+                # Tally risk distribution
+                attrition_data = prediction.get("attrition", {})
+                risk_level = str(
+                    attrition_data.get("risk_level", "")
+                    or attrition_data.get("risk", "LOW")
+                ).upper()
+
+                if risk_level == "HIGH":
+                    high_risk += 1
+                elif risk_level == "MEDIUM":
+                    medium_risk += 1
+                else:
+                    low_risk += 1
+
+                results.append({
+                    "employee_id": employee_id,
+                    "prediction":  prediction,
+                })
+
+            except Exception as err:
+                logger.warning(
+                    "Batch: prediction failed for %s — %s",
+                    employee_id, err,
+                )
+                errors.append({
+                    "employee_id": employee_id,
+                    "index":       idx,
+                    "errors":      [str(err)],
+                })
+
+        total_processed = len(results)
+        total_errors    = len(errors)
+
+        logger.info(
+            "Batch prediction complete: %d/%d succeeded, "
+            "high=%d medium=%d low=%d",
+            total_processed,
+            len(employees),
+            high_risk,
+            medium_risk,
+            low_risk,
         )
 
         return jsonify({
+            "success":   True,
+            "requested": len(employees),
+            "processed": total_processed,
+            "failed":    total_errors,
+            "results":   results,
+            "errors":    errors,
+            "summary": {
+                "high_risk":   high_risk,
+                "medium_risk": medium_risk,
+                "low_risk":    low_risk,
+            },
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+        })
 
+    except Exception as error:
+
+        logger.exception("Batch prediction error: %s", error)
+
+        return jsonify({
             "success": False,
-
-            "error":
-                str(error)
-
+            "error":   str(error),
         }), 500
 
 
@@ -1361,20 +1567,8 @@ def api_action_center(employee_id):
         })
 
     except Exception as error:
-
-        print(
-            "Action center error:",
-            error
-        )
-
-        return jsonify({
-
-            "success": False,
-
-            "error":
-                str(error)
-
-        }), 500
+        logger.exception("Action center error for %s: %s", employee_id, error)
+        return jsonify({"success": False, "error": str(error)}), 500
 
 
 # =========================================================
@@ -1560,20 +1754,8 @@ def api_employee_explain(employee_id):
         })
 
     except Exception as error:
-
-        print(
-            "SHAP explanation error:",
-            error
-        )
-
-        return jsonify({
-
-            "success": False,
-
-            "error":
-                str(error)
-
-        }), 500
+        logger.exception("SHAP explanation error for %s: %s", employee_id, error)
+        return jsonify({"success": False, "error": str(error)}), 500
 
 
 # =========================================================
@@ -1718,19 +1900,148 @@ def api_search():
         })
 
     except Exception as error:
+        logger.exception("Search error: %s", error)
+        return jsonify({"success": False, "error": str(error)}), 500
 
-        print(
-            "Search error:",
+
+
+
+# =========================================================
+# EXTERNAL WEBSITE SEARCH API
+# =========================================================
+
+# @app.route("/api/web-search", methods=["POST"])
+# def api_web_search():
+#     """Return external website recommendations independently of internal HR retrieval."""
+#     data = request.get_json(silent=True) or {}
+#     if not isinstance(data, dict):
+#         return jsonify({"success": False, "error": "Invalid request body."}), 400
+
+#     query = str(data.get("query", "")).strip()
+#     if not query:
+#         return jsonify({"success": False, "error": "Search query is required."}), 400
+#     if len(query) > 300:
+#         return jsonify({"success": False, "error": "Search query must be 300 characters or fewer."}), 400
+
+#     try:
+#         count = int(data.get("count", 6))
+#     except (TypeError, ValueError):
+#         count = 6
+#     count = max(1, min(count, 8))
+
+#     try:
+#         results = search_web(query, count=count)
+#         return jsonify({
+#             "success": True,
+#             "query": query,
+#             "provider": "Brave Search",
+#             "results": results,
+#             "result_count": len(results),
+#         })
+#     except WebSearchNotConfigured as error:
+#         # Configuration issues must not affect /api/search or /api/ir-analysis.
+#         return jsonify({
+#             "success": False,
+#             "code": "not_configured",
+#             "error": str(error),
+#         }), 503
+#     except WebSearchAPIError as error:
+#         logger.warning("External website search unavailable: %s", error)
+#         return jsonify({
+#             "success": False,
+#             "code": "web_search_unavailable",
+#             "error": str(error),
+#         }), error.status_code
+#     except Exception:
+#         logger.exception("Unexpected external website search error")
+#         return jsonify({
+#             "success": False,
+#             "code": "web_search_unavailable",
+#             "error": "External website search is temporarily unavailable. Internal HR search is still available.",
+#         }), 502
+
+
+
+# =========================================================
+# IR ANALYTICS API
+# =========================================================
+
+@app.route(
+    "/api/ir-analysis",
+    methods=["POST"]
+)
+def api_ir_analysis():
+    """
+    Return an academic IR analysis for the HR Knowledge workspace.
+
+    The endpoint supplements normal retrieval with:
+    - multi-model ranking comparison
+    - passage retrieval
+    - Precision@5 / Recall@5 / F1 / MRR evaluation
+    - transparent rule-based information extraction
+    """
+
+    try:
+        data = request.get_json() or {}
+
+        query = str(
+            data.get("query", "")
+        ).strip()
+
+        method = str(
+            data.get("method", "bm25")
+        ).strip().lower()
+
+        try:
+            top_k = int(
+                data.get("top_k", 5)
+            )
+        except (TypeError, ValueError):
+            top_k = 5
+
+        if not query:
+            return jsonify({
+                "success": False,
+                "error": "Search query is required"
+            }), 400
+
+        if method not in {
+            "bm25",
+            "tfidf",
+            "language_model"
+        }:
+            return jsonify({
+                "success": False,
+                "error": "Invalid retrieval method"
+            }), 400
+
+        top_k = max(
+            1,
+            min(top_k, 10)
+        )
+
+        analysis = build_ir_analysis(
+            query,
+            top_k=top_k,
+            selected_method=method
+        )
+
+        return jsonify({
+            "success": True,
+            "query": query,
+            "method": method,
+            "analysis": analysis
+        })
+
+    except Exception as error:
+        logger.exception(
+            "IR analysis error: %s",
             error
         )
 
         return jsonify({
-
             "success": False,
-
-            "error":
-                str(error)
-
+            "error": str(error)
         }), 500
 
 
@@ -1868,20 +2179,8 @@ def api_document(document_id):
         })
 
     except Exception as error:
-
-        print(
-            "Document retrieval error:",
-            error
-        )
-
-        return jsonify({
-
-            "success": False,
-
-            "error":
-                str(error)
-
-        }), 500
+        logger.exception("Document retrieval error for %s: %s", document_id, error)
+        return jsonify({"success": False, "error": str(error)}), 500
 
 
 # =========================================================
@@ -2309,20 +2608,8 @@ def api_simulate():
         })
 
     except Exception as error:
-
-        print(
-            "Simulation error:",
-            error
-        )
-
-        return jsonify({
-
-            "success": False,
-
-            "error":
-                str(error)
-
-        }), 500
+        logger.exception("Simulation error: %s", error)
+        return jsonify({"success": False, "error": str(error)}), 500
 
 
 
@@ -2590,12 +2877,8 @@ def api_dashboard():
         return jsonify(result)
 
     except Exception as error:
-        print("Dashboard API error:", error)
-
-        return jsonify({
-            "success": False,
-            "error": str(error)
-        }), 500
+        logger.exception("Dashboard API error: %s", error)
+        return jsonify({"success": False, "error": str(error)}), 500
 
 
 # =========================================================
@@ -2875,6 +3158,309 @@ def api_model_evidence():
         }), 500
 
 
+
+# =========================================================
+# PHASE 2 — BUSINESS KPI API
+# =========================================================
+
+@app.route(
+    "/api/employees/<employee_id>/business-kpi",
+    methods=["POST"]
+)
+def api_employee_business_kpi(employee_id):
+    """
+    Employee-level business KPI calculation.
+
+    Runs attrition + performance prediction and converts the
+    model output into financial metrics:
+    - Expected replacement cost (probability-weighted)
+    - Potential intervention saving
+    - Disengagement cost estimate
+    - Net risk exposure
+
+    All figures are in INR based on SHRM + Gallup benchmarks.
+    """
+    try:
+        employee = find_employee(employee_id)
+
+        if employee is None:
+            return jsonify({"success": False, "error": "Employee not found"}), 404
+
+        prediction = predict_employee(employee)
+        kpis       = calculate_employee_kpis(employee, prediction)
+
+        logger.info(
+            "Business KPI: employee=%s risk=%s exposure=₹%.0f",
+            employee_id,
+            kpis["risk_level"],
+            kpis["net_risk_exposure"],
+        )
+
+        return jsonify({
+            "success":     True,
+            "employee_id": employee_id,
+            "prediction":  prediction,
+            "business_kpi": kpis,
+        })
+
+    except Exception as error:
+        logger.exception("Business KPI error for %s: %s", employee_id, error)
+        return jsonify({"success": False, "error": str(error)}), 500
+
+
+@app.route(
+    "/api/workforce/business-kpi",
+    methods=["GET"]
+)
+def api_workforce_business_kpi():
+    """
+    Workforce-level aggregate business KPI.
+
+    Uses cached dashboard predictions (if available) to calculate
+    aggregate financial risk exposure for the entire workforce.
+
+    Returns:
+    - Total expected attrition cost
+    - Potential intervention savings
+    - Estimated disengagement cost
+    - Risk-tier breakdown
+    """
+    try:
+        employees_raw = load_employees()
+        employees     = [clean_employee(e) for e in employees_raw]
+
+        # Reuse cached dashboard predictions if fresh
+        cached_probs  = None
+        if _dashboard_cache is not None:
+            logger.debug("Using cached dashboard predictions for workforce KPI")
+
+        kpis = calculate_workforce_kpis(employees)
+
+        logger.info(
+            "Workforce KPI: total=%d exposure=₹%.0f saving=₹%.0f",
+            kpis["total_employees"],
+            kpis["total_risk_exposure"],
+            kpis["potential_intervention_saving"],
+        )
+
+        return jsonify({
+            "success":      True,
+            "workforce_kpi": kpis,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+        })
+
+    except Exception as error:
+        logger.exception("Workforce KPI error: %s", error)
+        return jsonify({"success": False, "error": str(error)}), 500
+
+
+# =========================================================
+# PHASE 2 — MODEL REGISTRY API
+# =========================================================
+
+@app.route(
+    "/api/models",
+    methods=["GET"]
+)
+def api_models():
+    """
+    Return the model registry — version, training metadata,
+    and last recorded evaluation metrics for each model.
+    """
+    try:
+        summary = model_registry.summary()
+        return jsonify({
+            "success": True,
+            "models":  summary,
+        })
+    except Exception as error:
+        logger.exception("Model registry error: %s", error)
+        return jsonify({"success": False, "error": str(error)}), 500
+
+
+@app.route(
+    "/api/models/<task>",
+    methods=["GET"]
+)
+def api_model_detail(task):
+    """
+    Return full metadata for a specific model task.
+
+    Args:
+        task: ``attrition`` or ``performance``
+    """
+    try:
+        info = model_registry.get_model_info(task)
+        if info is None:
+            return jsonify({
+                "success": False,
+                "error":   f"Unknown model task '{task}'. "
+                           "Valid values: attrition, performance.",
+            }), 404
+
+        return jsonify({
+            "success": True,
+            "task":    task,
+            "model":   info,
+        })
+    except Exception as error:
+        logger.exception("Model detail error: %s", error)
+        return jsonify({"success": False, "error": str(error)}), 500
+
+
+# =========================================================
+# PHASE 2 — CSV REPORT EXPORT
+# =========================================================
+
+@app.route(
+    "/api/export/risk-report",
+    methods=["GET"]
+)
+def api_export_risk_report():
+    """
+    Download a CSV risk report for all employees.
+
+    Columns:
+    - employee_id, department, job_role, monthly_income
+    - attrition_probability, risk_level
+    - expected_replacement_cost, intervention_saving
+    - performance_rating, performance_label
+
+    Query params:
+    - risk_filter: ``high`` | ``medium`` | ``low`` | ``all`` (default: all)
+    - department:  filter to a specific department
+    """
+    try:
+        risk_filter = request.args.get("risk_filter", "all").strip().lower()
+        dept_filter = request.args.get("department",  "").strip().lower()
+
+        logger.info(
+            "CSV export requested — risk_filter=%s department=%s",
+            risk_filter, dept_filter or "all",
+        )
+
+        employees_raw = load_employees()
+        employees     = [clean_employee(e) for e in employees_raw]
+
+        # Apply department filter
+        if dept_filter:
+            employees = [
+                e for e in employees
+                if str(e.get("department", "")).strip().lower() == dept_filter
+            ]
+
+        output   = io.StringIO()
+        fieldnames = [
+            "employee_id", "department", "job_role",
+            "monthly_income", "age",
+            "attrition_probability", "risk_level",
+            "expected_replacement_cost_inr",
+            "intervention_saving_inr",
+            "net_risk_exposure_inr",
+            "performance_rating", "performance_label",
+        ]
+        writer = csv.DictWriter(
+            output,
+            fieldnames=fieldnames,
+            extrasaction="ignore"
+        )
+        writer.writeheader()
+
+        exported      = 0
+        skipped_risk  = 0
+
+        for employee in employees:
+            emp_id = str(employee.get("employee_id", ""))
+
+            try:
+                prediction = predict_employee(employee)
+                kpis       = calculate_employee_kpis(employee, prediction)
+            except Exception as err:
+                logger.warning("Export: skipping %s — %s", emp_id, err)
+                continue
+
+            risk_level = kpis["risk_level"].lower()
+
+            if risk_filter != "all" and risk_level != risk_filter:
+                skipped_risk += 1
+                continue
+
+            attrition_info   = prediction.get("attrition", {})
+            performance_info = prediction.get("performance", {})
+
+            writer.writerow({
+                "employee_id":                   emp_id,
+                "department":                    employee.get("department", ""),
+                "job_role":                      employee.get("job_role", ""),
+                "monthly_income":                employee.get("monthly_income", ""),
+                "age":                           employee.get("age", ""),
+                "attrition_probability":         round(
+                    float(attrition_info.get("probability", 0) or 0), 4
+                ),
+                "risk_level":                    kpis["risk_level"],
+                "expected_replacement_cost_inr": kpis["expected_replacement_cost"],
+                "intervention_saving_inr":       kpis["intervention_saving"],
+                "net_risk_exposure_inr":         kpis["net_risk_exposure"],
+                "performance_rating":            kpis["performance_rating"],
+                "performance_label":             kpis["performance_label"],
+            })
+            exported += 1
+
+        csv_content = output.getvalue()
+        output.close()
+
+        filename   = (
+            f"hr_risk_report_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+        )
+
+        logger.info(
+            "CSV export complete — exported=%d skipped_by_filter=%d filename=%s",
+            exported, skipped_risk, filename,
+        )
+
+        return Response(
+            csv_content,
+            mimetype="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "X-Records-Exported":  str(exported),
+            },
+        )
+
+    except Exception as error:
+        logger.exception("CSV export error: %s", error)
+        return jsonify({"success": False, "error": str(error)}), 500
+
+
+# =========================================================
+# PHASE 2 — CACHE MANAGEMENT
+# =========================================================
+
+@app.route(
+    "/api/cache/invalidate",
+    methods=["POST"]
+)
+def api_cache_invalidate():
+    """
+    Manually invalidate the dashboard cache.
+
+    Useful after bulk employee data updates to force a fresh
+    prediction run on the next dashboard request.
+    """
+    global _dashboard_cache, _dashboard_cache_time
+
+    _dashboard_cache      = None
+    _dashboard_cache_time = None
+
+    logger.info("Dashboard cache manually invalidated")
+
+    return jsonify({
+        "success": True,
+        "message": "Dashboard cache cleared. "
+                   "Next dashboard request will recompute predictions.",
+    })
+
+
 # =========================================================
 # ERROR HANDLERS
 # =========================================================
@@ -2911,8 +3497,16 @@ def internal_server_error(error):
 
 if __name__ == "__main__":
 
+    from config import FLASK_HOST, FLASK_PORT, FLASK_DEBUG
+
+    logger.info(
+        "Starting HR AI Decision Support System — "
+        "host=%s port=%d debug=%s",
+        FLASK_HOST, FLASK_PORT, FLASK_DEBUG,
+    )
+
     app.run(
-        host="127.0.0.1",
-        port=5000,
-        debug=False
+        host=FLASK_HOST,
+        port=FLASK_PORT,
+        debug=FLASK_DEBUG,
     )

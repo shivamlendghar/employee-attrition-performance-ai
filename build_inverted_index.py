@@ -1,32 +1,38 @@
-# ==========================================================
-# build_inverted_index.py
-#
-# HR Information Retrieval
-# Text Preprocessing + Inverted Index
-# ==========================================================
+"""
+HR INFORMATION RETRIEVAL - INDEX BUILDER
+
+Unit II / Unit V foundation:
+- Text preprocessing
+- Tokenization
+- Stop-word removal
+- Simple stemming
+- Inverted index construction
+- Term frequency
+- Document frequency
+- Index statistics / metadata
+
+Input:
+    extracted_documents/*.txt
+
+Output:
+    ir_artifacts/inverted_index.json
+    ir_artifacts/document_term_frequencies.json
+    ir_artifacts/document_frequency.json
+    ir_artifacts/processed_documents.json
+    ir_artifacts/index_metadata.json
+"""
 
 from pathlib import Path
+from collections import Counter, defaultdict
 import json
 import re
-from collections import defaultdict, Counter
+from datetime import datetime, timezone
 
-
-# ==========================================================
-# PATHS
-# ==========================================================
 
 PROJECT_DIR = Path(__file__).resolve().parent
-
 DOCUMENT_DIR = PROJECT_DIR / "extracted_documents"
-
 IR_ARTIFACT_DIR = PROJECT_DIR / "ir_artifacts"
-
 IR_ARTIFACT_DIR.mkdir(exist_ok=True)
-
-
-# ==========================================================
-# STOPWORDS
-# ==========================================================
 
 STOPWORDS = {
     "a", "an", "the", "and", "or", "but",
@@ -42,101 +48,58 @@ STOPWORDS = {
     "this", "that", "these", "those",
     "it", "its", "they", "their", "them",
     "he", "she", "his", "her", "we",
-    "our", "you", "your", "i", "me",
-    "my", "an", "any", "all"
+    "our", "you", "your", "i", "me", "my",
+    "any", "all"
 }
 
 
-# ==========================================================
+# ----------------------------------------------------------
 # SIMPLE STEMMER
-# ==========================================================
+# ----------------------------------------------------------
 
 def simple_stem(word):
-    """
-    Small rule-based stemmer.
+    """Transparent rule-based stemming for an academic IR project."""
 
-    This is intentionally simple so the preprocessing
-    remains transparent for an academic IR project.
-    """
+    word = str(word).lower().strip()
 
     suffixes = [
-        "ingly",
-        "edly",
-        "ments",
-        "ment",
-        "ness",
-        "ing",
-        "ers",
-        "ies",
-        "ed",
-        "er",
-        "es",
-        "s"
+        "ingly", "edly", "ments", "ment", "ness",
+        "ing", "ers", "ies", "ed", "er", "es", "s"
     ]
 
     for suffix in suffixes:
-
-        if (
-            word.endswith(suffix)
-            and len(word) > len(suffix) + 2
-        ):
-
-            word = word[
-                :-len(suffix)
-            ]
-
-            break
-
-    # Handle common ies → y
-    if word.endswith("i") and len(word) > 3:
-        pass
+        if word.endswith(suffix) and len(word) > len(suffix) + 2:
+            return word[:-len(suffix)]
 
     return word
 
 
-# ==========================================================
-# TOKENIZATION
-# ==========================================================
+# ----------------------------------------------------------
+# PREPROCESSING
+# ----------------------------------------------------------
 
 def preprocess_text(text):
     """
-    Convert raw text into normalized tokens.
-
-    Steps:
-        1. Lowercase
-        2. Remove non-alphanumeric characters
-        3. Tokenize
-        4. Remove stopwords
-        5. Remove very short tokens
-        6. Apply simple stemming
+    Normalize raw text into indexed terms:
+    lowercase -> punctuation removal -> tokenization ->
+    stopword removal -> short-token removal -> stemming.
     """
 
-    # Lowercase
-    text = text.lower()
+    if not text:
+        return []
 
-    # Keep letters and numbers
-    text = re.sub(
-        r"[^a-z0-9\s]",
-        " ",
-        text
-    )
-
-    # Tokenize
-    tokens = text.split()
+    text = str(text).lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
 
     processed_tokens = []
 
-    for token in tokens:
-
-        # Stopword removal
+    for token in text.split():
         if token in STOPWORDS:
             continue
 
-        # Ignore very short tokens
         if len(token) < 2:
             continue
 
-        # Simple stemming
         token = simple_stem(token)
 
         if token:
@@ -145,165 +108,23 @@ def preprocess_text(text):
     return processed_tokens
 
 
-# ==========================================================
-# READ DOCUMENT
-# ==========================================================
+# ----------------------------------------------------------
+# FILE HELPERS
+# ----------------------------------------------------------
 
 def read_document(file_path):
-    """
-    Read an extracted text document.
-    """
-
-    with open(
-        file_path,
-        "r",
+    return file_path.read_text(
         encoding="utf-8",
         errors="replace"
-    ) as file:
-
-        return file.read()
-
-
-# ==========================================================
-# BUILD INVERTED INDEX
-# ==========================================================
-
-def build_index():
-    """
-    Build:
-
-        term -> {
-            document_id: term_frequency
-        }
-
-    Example:
-
-        overtime:
-            overtime_policy: 4
-
-        training:
-            training_policy: 5
-            performance_policy: 2
-    """
-
-    inverted_index = defaultdict(dict)
-
-    document_term_frequencies = {}
-
-    documents = sorted(
-        DOCUMENT_DIR.glob("*.txt")
     )
 
-    print(
-        f"\nDocuments found: {len(documents)}"
-    )
-
-    if not documents:
-
-        raise FileNotFoundError(
-            "No extracted TXT documents found in "
-            f"{DOCUMENT_DIR}"
-        )
-
-    # ------------------------------------------------------
-    # Process each document
-    # ------------------------------------------------------
-
-    for document in documents:
-
-        print(
-            f"\nProcessing: {document.name}"
-        )
-
-        text = read_document(
-            document
-        )
-
-        tokens = preprocess_text(
-            text
-        )
-
-        # Count term frequencies
-        term_counts = Counter(
-            tokens
-        )
-
-        document_id = (
-            document.stem
-        )
-
-        document_term_frequencies[
-            document_id
-        ] = dict(term_counts)
-
-        # Add to inverted index
-        for term, frequency in term_counts.items():
-
-            inverted_index[term][
-                document_id
-            ] = frequency
-
-        print(
-            f"  Original words : "
-            f"{len(text.split())}"
-        )
-
-        print(
-            f"  Processed tokens: "
-            f"{len(tokens)}"
-        )
-
-        print(
-            f"  Unique terms    : "
-            f"{len(term_counts)}"
-        )
-
-    return (
-        dict(inverted_index),
-        document_term_frequencies
-    )
-
-
-# ==========================================================
-# DOCUMENT FREQUENCY
-# ==========================================================
-
-def calculate_document_frequency(
-    inverted_index
-):
-    """
-    Calculate document frequency:
-
-        DF(term) = number of documents
-                   containing the term
-    """
-
-    document_frequency = {}
-
-    for term, postings in inverted_index.items():
-
-        document_frequency[term] = len(
-            postings
-        )
-
-    return document_frequency
-
-
-# ==========================================================
-# SAVE JSON
-# ==========================================================
 
 def save_json(data, file_path):
-    """
-    Save dictionary as JSON.
-    """
-
     with open(
         file_path,
         "w",
         encoding="utf-8"
     ) as file:
-
         json.dump(
             data,
             file,
@@ -312,224 +133,237 @@ def save_json(data, file_path):
         )
 
 
-# ==========================================================
-# SEARCH TERM
-# ==========================================================
+# ----------------------------------------------------------
+# INDEX CONSTRUCTION
+# ----------------------------------------------------------
 
-def search_term(
-    inverted_index,
-    term
-):
-    """
-    Return documents containing a term.
-    """
+def build_index():
+    """Create term -> document -> term-frequency inverted index."""
 
-    term = term.lower()
-
-    if term not in inverted_index:
-
-        return {}
-
-    return inverted_index[
-        term
-    ]
-
-
-# ==========================================================
-# DISPLAY SAMPLE INDEX
-# ==========================================================
-
-def display_sample_terms(
-    inverted_index,
-    document_frequency
-):
-
-    print("\n" + "=" * 70)
-    print("SAMPLE INVERTED INDEX")
-    print("=" * 70)
-
-    # Sort terms alphabetically
-    terms = sorted(
-        inverted_index.keys()
+    documents = sorted(
+        DOCUMENT_DIR.glob("*.txt")
     )
 
-    for term in terms[:30]:
-
-        print(
-            f"{term:20} "
-            f"DF={document_frequency[term]:<3} "
-            f"{inverted_index[term]}"
+    if not documents:
+        raise FileNotFoundError(
+            f"No extracted TXT documents found in {DOCUMENT_DIR}"
         )
 
+    inverted_index = defaultdict(dict)
+    document_term_frequencies = {}
+    processed_documents = {}
+    document_statistics = {}
 
-# ==========================================================
+    for document in documents:
+        text = read_document(document)
+        tokens = preprocess_text(text)
+        term_counts = Counter(tokens)
+        document_id = document.stem
+
+        document_term_frequencies[document_id] = dict(term_counts)
+        processed_documents[document_id] = tokens
+
+        for term, frequency in term_counts.items():
+            inverted_index[term][document_id] = frequency
+
+        document_statistics[document_id] = {
+            "original_word_count": len(text.split()),
+            "processed_token_count": len(tokens),
+            "unique_term_count": len(term_counts)
+        }
+
+    return (
+        dict(inverted_index),
+        document_term_frequencies,
+        processed_documents,
+        document_statistics
+    )
+
+
+# ----------------------------------------------------------
+# DOCUMENT FREQUENCY
+# ----------------------------------------------------------
+
+def calculate_document_frequency(inverted_index):
+    """DF(term) = number of documents containing the term."""
+
+    return {
+        term: len(postings)
+        for term, postings in inverted_index.items()
+    }
+
+
+# ----------------------------------------------------------
+# TERM SEARCH
+# ----------------------------------------------------------
+
+def search_term(inverted_index, term):
+    """Return postings for one normalized term."""
+
+    term = simple_stem(str(term).lower())
+    return inverted_index.get(term, {})
+
+
+# ----------------------------------------------------------
+# INDEX METADATA
+# ----------------------------------------------------------
+
+def build_metadata(
+    document_term_frequencies,
+    inverted_index,
+    document_statistics
+):
+    document_count = len(
+        document_term_frequencies
+    )
+
+    unique_terms = len(inverted_index)
+
+    total_postings = sum(
+        len(postings)
+        for postings in inverted_index.values()
+    )
+
+    document_lengths = {
+        document_id: sum(term_counts.values())
+        for document_id, term_counts
+        in document_term_frequencies.items()
+    }
+
+    total_tokens = sum(
+        document_lengths.values()
+    )
+
+    average_document_length = (
+        total_tokens / document_count
+        if document_count
+        else 0.0
+    )
+
+    return {
+        "document_count": document_count,
+        "unique_terms": unique_terms,
+        "total_indexed_postings": total_postings,
+        "total_processed_tokens": total_tokens,
+        "average_document_length": round(
+            average_document_length,
+            4
+        ),
+        "preprocessing": [
+            "lowercase",
+            "punctuation removal",
+            "tokenization",
+            "stopword removal",
+            "short-token removal",
+            "rule-based stemming"
+        ],
+        "document_statistics": document_statistics,
+        "generated_at": datetime.now(
+            timezone.utc
+        ).isoformat()
+    }
+
+
+# ----------------------------------------------------------
 # MAIN
-# ==========================================================
+# ----------------------------------------------------------
 
 def main():
-
     print("=" * 70)
     print("HR INFORMATION RETRIEVAL")
     print("TEXT PREPROCESSING + INVERTED INDEX")
     print("=" * 70)
 
-    # ------------------------------------------------------
-    # Build index
-    # ------------------------------------------------------
-
     (
         inverted_index,
-        document_term_frequencies
+        document_term_frequencies,
+        processed_documents,
+        document_statistics
     ) = build_index()
 
-    # ------------------------------------------------------
-    # Document frequency
-    # ------------------------------------------------------
-
-    document_frequency = (
-        calculate_document_frequency(
-            inverted_index
-        )
+    document_frequency = calculate_document_frequency(
+        inverted_index
     )
-
-    # ------------------------------------------------------
-    # Save index
-    # ------------------------------------------------------
 
     save_json(
         inverted_index,
-        IR_ARTIFACT_DIR /
-        "inverted_index.json"
+        IR_ARTIFACT_DIR / "inverted_index.json"
     )
 
     save_json(
         document_term_frequencies,
-        IR_ARTIFACT_DIR /
-        "document_term_frequencies.json"
+        IR_ARTIFACT_DIR / "document_term_frequencies.json"
     )
 
     save_json(
         document_frequency,
-        IR_ARTIFACT_DIR /
-        "document_frequency.json"
+        IR_ARTIFACT_DIR / "document_frequency.json"
     )
-
-    # ------------------------------------------------------
-    # Save processed documents
-    # ------------------------------------------------------
-
-    processed_documents = {}
-
-    for document in sorted(
-        DOCUMENT_DIR.glob("*.txt")
-    ):
-
-        text = read_document(
-            document
-        )
-
-        processed_documents[
-            document.stem
-        ] = preprocess_text(
-            text
-        )
 
     save_json(
         processed_documents,
-        IR_ARTIFACT_DIR /
-        "processed_documents.json"
+        IR_ARTIFACT_DIR / "processed_documents.json"
     )
 
-    # ------------------------------------------------------
-    # Display sample
-    # ------------------------------------------------------
-
-    display_sample_terms(
+    metadata = build_metadata(
+        document_term_frequencies,
         inverted_index,
-        document_frequency
+        document_statistics
     )
 
-    # ------------------------------------------------------
-    # Statistics
-    # ------------------------------------------------------
+    save_json(
+        metadata,
+        IR_ARTIFACT_DIR / "index_metadata.json"
+    )
 
     print("\n" + "=" * 70)
     print("INDEX STATISTICS")
     print("=" * 70)
-
     print(
-        "Number of documents : "
-        f"{len(document_term_frequencies)}"
+        f"Number of documents     : {metadata['document_count']}"
+    )
+    print(
+        f"Number of unique terms  : {metadata['unique_terms']}"
+    )
+    print(
+        "Total indexed postings  : "
+        f"{metadata['total_indexed_postings']}"
+    )
+    print(
+        "Total processed tokens  : "
+        f"{metadata['total_processed_tokens']}"
+    )
+    print(
+        "Average document length : "
+        f"{metadata['average_document_length']}"
     )
 
-    print(
-        "Number of unique terms: "
-        f"{len(inverted_index)}"
-    )
+    print("\nSample term lookups:")
 
-    print(
-        "Total indexed postings: "
-        f"{sum(len(v) for v in inverted_index.values())}"
-    )
-
-    # ------------------------------------------------------
-    # Example searches
-    # ------------------------------------------------------
-
-    print("\n" + "=" * 70)
-    print("SAMPLE TERM SEARCH")
-    print("=" * 70)
-
-    test_terms = [
+    for term in [
         "employee",
         "overtime",
         "training",
         "promotion",
         "benefits",
         "performance"
-    ]
-
-    for term in test_terms:
-
-        result = search_term(
-            inverted_index,
-            term
-        )
-
+    ]:
         print(
-            f"\n'{term}' → {result}"
+            f"  {term:<15} -> "
+            f"{search_term(inverted_index, term)}"
         )
 
-    # ------------------------------------------------------
-    # Final message
-    # ------------------------------------------------------
+    print("\nGenerated files:")
+    print("  ir_artifacts/inverted_index.json")
+    print("  ir_artifacts/document_term_frequencies.json")
+    print("  ir_artifacts/document_frequency.json")
+    print("  ir_artifacts/processed_documents.json")
+    print("  ir_artifacts/index_metadata.json")
 
     print("\n" + "=" * 70)
     print("INVERTED INDEX BUILD COMPLETED")
     print("=" * 70)
 
-    print("\nGenerated files:")
-
-    print(
-        "ir_artifacts/inverted_index.json"
-    )
-
-    print(
-        "ir_artifacts/document_term_frequencies.json"
-    )
-
-    print(
-        "ir_artifacts/document_frequency.json"
-    )
-
-    print(
-        "ir_artifacts/processed_documents.json"
-    )
-
-
-# ==========================================================
-# ENTRY POINT
-# ==========================================================
 
 if __name__ == "__main__":
-    main() 
+    main()
